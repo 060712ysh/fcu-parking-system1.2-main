@@ -1,0 +1,85 @@
+name: Build and deploy Node.js app to Azure Web App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  # 改成你 Azure App Service 的名稱，例如 fcu-parking-system
+  AZURE_WEBAPP_NAME: fcu-parking-system
+  NODE_VERSION: '22.18.0'
+  PORT: '8080'
+  DB_PATH: '/home/site/wwwroot/server/database.sqlite'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Vue frontend
+        run: npm run build
+
+      - name: Rebuild sqlite3 for Azure Linux
+        run: npm rebuild sqlite3 --build-from-source
+
+      - name: Remove development-only files
+        run: |
+          rm -rf node_modules/.cache
+          rm -rf .git
+
+      - name: Upload artifact for deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-app
+          path: |
+            .
+            !node_modules/.cache
+            !.git
+            !.github
+
+  deploy:
+    runs-on: ubuntu-22.04
+    needs: build
+    environment:
+      name: Production
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app
+          path: .
+
+      - name: Deploy to Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Configure Azure App Service environment variables
+        uses: azure/appservice-settings@v1
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          app-settings-json: |
+            [
+              {"name":"PORT","value":"8080","slotSetting":false},
+              {"name":"DB_PATH","value":"/home/site/wwwroot/server/database.sqlite","slotSetting":false}
+            ]
